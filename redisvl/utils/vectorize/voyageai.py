@@ -42,7 +42,7 @@ DEFAULT_VOYAGE_TOKEN_LIMIT = 120_000
 
 
 class VoyageAIVectorizer(BaseVectorizer):
-    """The VoyageAIVectorizer class utilizes VoyageAI's API to generate
+    """The VoyageAIVectorizer class utilizes VoyageAI by MongoDB's API to generate
     embeddings for text and multimodal (text / image / video) data.
 
     This vectorizer is designed to interact with VoyageAI's /embed, /multimodal_embed,
@@ -506,6 +506,14 @@ class VoyageAIVectorizer(BaseVectorizer):
         self, batch: list[str], input_type: str | None, kwargs: dict[str, Any]
     ) -> dict[str, Any]:
         """Build the kwargs for a ``contextualized_embed`` call.
+
+        Per the official spec the ``inputs`` parameter accepts
+        ``Union[List[List[str]], List[str]]`` - a list of pre-chunked documents
+        (``List[List[str]]``) or a flat list of strings (``List[str]``); see
+        https://docs.voyageai.com/docs/contextualized-chunk-embeddings. When
+        ``enable_auto_chunking=True`` the API requires the flat ``List[str]``
+        form, which is what this vectorizer sends to keep the
+        one-embedding-per-input contract.
 
         The batch is passed as a flat ``list[str]``. Auto-chunking is only valid
         for ``input_type="document"`` (VoyageAI rejects it for queries), so every

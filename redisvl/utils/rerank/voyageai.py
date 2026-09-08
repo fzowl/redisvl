@@ -8,7 +8,7 @@ from redisvl.utils.rerank.base import BaseReranker
 
 class VoyageAIReranker(BaseReranker):
     """
-    The VoyageAIReranker class uses VoyageAI's API to rerank documents based on an
+    The VoyageAIReranker class uses VoyageAI by MongoDB's API to rerank documents based on an
     input query.
 
     This reranker is designed to interact with VoyageAI's /rerank API,

@@ -35,7 +35,7 @@ Vectorizers handle batching internally, breaking large batches into provider-app
 
 ### Supported Providers
 
-RedisVL includes vectorizers for OpenAI, Azure OpenAI, Cohere, HuggingFace (local), Mistral, Google (via `google-genai`, covering both Vertex AI and the Gemini Developer API), AWS Bedrock, VoyageAI, and others. See the {doc}`/api/vectorizer` for the complete list. You can also create custom vectorizers that wrap any embedding function.
+RedisVL includes vectorizers for OpenAI, Azure OpenAI, Cohere, HuggingFace (local), Mistral, Google (via `google-genai`, covering both Vertex AI and the Gemini Developer API), AWS Bedrock, VoyageAI by MongoDB, and others. See the {doc}`/api/vectorizer` for the complete list. You can also create custom vectorizers that wrap any embedding function.
 
 ## Rerankers
 
@@ -59,7 +59,7 @@ Reranking adds latency (typically 50-200ms depending on the provider and number 
 
 ### Supported Providers
 
-RedisVL includes rerankers for HuggingFace cross-encoders (local), Cohere Rerank API, and VoyageAI Rerank API.
+RedisVL includes rerankers for HuggingFace cross-encoders (local), Cohere Rerank API, and VoyageAI by MongoDB Rerank API.
 
 ## Two-Stage Retrieval
 
