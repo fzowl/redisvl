@@ -42,10 +42,10 @@ DEFAULT_VOYAGE_TOKEN_LIMIT = 120_000
 
 
 class VoyageAIVectorizer(BaseVectorizer):
-    """The VoyageAIVectorizer class utilizes VoyageAI's API to generate
+    """The VoyageAIVectorizer class utilizes VoyageAI by MongoDB's API to generate
     embeddings for text and multimodal (text / image / video) data.
 
-    This vectorizer is designed to interact with VoyageAI's /embed, /multimodal_embed,
+    This vectorizer is designed to interact with VoyageAI by MongoDB's /embed, /multimodal_embed,
     and /contextualized_embed APIs. Any model identifier accepted by VoyageAI can be
     passed via ``model`` - for example the general-purpose ``voyage-4-large`` /
     ``voyage-4`` / ``voyage-4-lite`` / ``voyage-4-nano`` family, domain models such
@@ -55,7 +55,7 @@ class VoyageAIVectorizer(BaseVectorizer):
 
     It requires an API key for authentication. The key can be provided
     directly in the `api_config` dictionary or through the `VOYAGE_API_KEY`
-    environment variable. User must obtain an API key from VoyageAI's website
+    environment variable. User must obtain an API key from VoyageAI by MongoDB's website
     (https://dash.voyageai.com/). Additionally, the `voyageai` python
     client must be installed with `pip install voyageai`. For image embeddings, the Pillow
     library must also be installed with `pip install pillow`.

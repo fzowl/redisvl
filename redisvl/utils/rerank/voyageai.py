@@ -8,13 +8,13 @@ from redisvl.utils.rerank.base import BaseReranker
 
 class VoyageAIReranker(BaseReranker):
     """
-    The VoyageAIReranker class uses VoyageAI's API to rerank documents based on an
+    The VoyageAIReranker class uses VoyageAI by MongoDB's API to rerank documents based on an
     input query.
 
-    This reranker is designed to interact with VoyageAI's /rerank API,
+    This reranker is designed to interact with VoyageAI by MongoDB's /rerank API,
     requiring an API key for authentication. The key can be provided
     directly in the `api_config` dictionary or through the `VOYAGE_API_KEY`
-    environment variable. User must obtain an API key from VoyageAI's website
+    environment variable. User must obtain an API key from VoyageAI by MongoDB's website
     (https://dash.voyageai.com/). Additionally, the `voyageai` python
     client must be installed with `pip install voyageai`.
 
