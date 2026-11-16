@@ -8,22 +8,24 @@ from redisvl.utils.rerank.base import BaseReranker
 
 class VoyageAIReranker(BaseReranker):
     """
-    The VoyageAIReranker class uses VoyageAI's API to rerank documents based on an
-    input query.
+    The VoyageAIReranker class uses Voyage AI by MongoDB's API to rerank documents
+    based on an input query.
 
-    This reranker is designed to interact with VoyageAI's /rerank API,
+    This reranker is designed to interact with Voyage AI's /rerank API,
     requiring an API key for authentication. The key can be provided
     directly in the `api_config` dictionary or through the `VOYAGE_API_KEY`
-    environment variable. User must obtain an API key from VoyageAI's website
-    (https://dash.voyageai.com/). Additionally, the `voyageai` python
-    client must be installed with `pip install voyageai`.
+    environment variable. User must obtain an API key from Voyage AI's website
+    (https://dash.voyageai.com/). Models such as ``rerank-3``, ``rerank-3-lite``,
+    ``rerank-2.5`` and ``rerank-2.5-lite`` are available; see
+    https://docs.voyageai.com/docs/reranker for the current catalog.
+    Additionally, the `voyageai` python client must be installed with `pip install voyageai`.
 
     .. code-block:: python
 
         from redisvl.utils.rerank import VoyageAIReranker
 
-        # set up the VoyageAI reranker with some configuration
-        reranker = VoyageAIReranker(rank_by=["content"], limit=2)
+        # set up the Voyage AI reranker with some configuration
+        reranker = VoyageAIReranker(model="rerank-3", rank_by=["content"], limit=2)
         # rerank raw search results based on user input/query
         results = reranker.rank(
             query="your input query text here",
@@ -52,7 +54,7 @@ class VoyageAIReranker(BaseReranker):
         and API configuration.
 
         Parameters:
-            model (str): The identifier for the VoyageAI model used for reranking.
+            model (str): The identifier for the Voyage AI model used for reranking.
             rank_by (Optional[List[str]]): Optional list of keys specifying the
                 attributes in the documents that should be considered for
                 ranking. None means ranking will rely on the model's default
@@ -76,21 +78,21 @@ class VoyageAIReranker(BaseReranker):
 
     def _initialize_clients(self, api_config: dict[str, Any] | None, **kwargs):
         """
-        Setup the VoyageAI clients using the provided API key or an
+        Setup the Voyage AI clients using the provided API key or an
         environment variable.
         """
         # Dynamic import of the voyageai module
         try:
             from voyageai import AsyncClient, Client
         except ImportError:
-            raise ImportError("VoyageAI reranker requires the voyageai library. \
+            raise ImportError("Voyage AI reranker requires the voyageai library. \
                     Please install with `pip install voyageai`")
 
         # Fetch the API key from api_config or environment variable
         api_key = (api_config or {}).get("api_key") or os.getenv("VOYAGE_API_KEY")
         if not api_key:
             raise ValueError(
-                "VoyageAI API key is required. "
+                "Voyage AI API key is required. "
                 "Provide it in api_config or set the VOYAGE_API_KEY environment variable."
             )
         self._client = Client(api_key=api_key, **kwargs)
@@ -147,7 +149,7 @@ class VoyageAIReranker(BaseReranker):
         self, query: str, docs: list[dict[str, Any]] | list[str], **kwargs
     ) -> tuple[list[dict[str, Any]], list[float]] | list[dict[str, Any]]:
         """
-        Rerank documents based on the provided query using the VoyageAI rerank API.
+        Rerank documents based on the provided query using the Voyage AI rerank API.
 
         This method processes the user's query and the provided documents to
         rerank them in a manner that is potentially more relevant to the
@@ -172,7 +174,7 @@ class VoyageAIReranker(BaseReranker):
         self, query: str, docs: list[dict[str, Any]] | list[str], **kwargs
     ) -> tuple[list[dict[str, Any]], list[float]] | list[dict[str, Any]]:
         """
-        Rerank documents based on the provided query using the VoyageAI rerank API.
+        Rerank documents based on the provided query using the Voyage AI rerank API.
 
         This method processes the user's query and the provided documents to
         rerank them in a manner that is potentially more relevant to the

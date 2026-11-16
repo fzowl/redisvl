@@ -8,15 +8,19 @@ from tenacity.retry import retry_if_not_exception_type
 if TYPE_CHECKING:
     from redisvl.extensions.cache.embeddings.embeddings import EmbeddingsCache
 
+from redisvl.utils.log import get_logger
 from redisvl.utils.vectorize.base import BaseVectorizer
+
+logger = get_logger(__name__)
 
 # ignore that voyageai isn't imported
 # mypy: disable-error-code="name-defined"
 
-# Per-request total token limits by model, used for token-aware batching of the
-# plain text embedding path. Values track VoyageAI's documented per-request token
-# limits (https://docs.voyageai.com/docs/embeddings). Unknown models fall back to
-# the conservative default below.
+# Per-request total token limits by model, used for token-aware batching.
+# Values track Voyage AI's documented per-request limits
+# (https://docs.voyageai.com/docs/embeddings). Models with no documented limit
+# (e.g. voyage-code-4) use the most conservative documented tier,
+# DEFAULT_VOYAGE_TOKEN_LIMIT, rather than an invented number.
 VOYAGE_TOKEN_LIMITS: dict[str, int] = {
     "voyage-2": 320_000,
     "voyage-02": 320_000,
@@ -28,10 +32,8 @@ VOYAGE_TOKEN_LIMITS: dict[str, int] = {
     "voyage-4": 320_000,
     "voyage-4-lite": 1_000_000,
     "voyage-4-large": 120_000,
-    "voyage-4-nano": 120_000,
     "voyage-code-2": 120_000,
     "voyage-code-3": 120_000,
-    "voyage-code-4": 120_000,
     "voyage-finance-2": 120_000,
     "voyage-law-2": 120_000,
     "voyage-large-2": 120_000,
@@ -40,22 +42,36 @@ VOYAGE_TOKEN_LIMITS: dict[str, int] = {
 }
 DEFAULT_VOYAGE_TOKEN_LIMIT = 120_000
 
+# Contextualized (voyage-context-*) requests: 120K total tokens with
+# auto-chunking (documents), 32K without it (queries)
+# (https://docs.voyageai.com/docs/contextualized-chunk-embeddings).
+VOYAGE_CONTEXT_DOCUMENT_TOKEN_LIMIT = 120_000
+VOYAGE_CONTEXT_QUERY_TOKEN_LIMIT = 32_000
+
+# Every Voyage AI embedding endpoint accepts at most 1,000 inputs per request.
+VOYAGE_MAX_INPUTS_PER_REQUEST = 1_000
+# Documents are sent to contextualized embeddings with auto-chunking and this
+# chunk size, so each document stays a single chunk up to the 32K context window.
+VOYAGE_CONTEXT_CHUNK_SIZE = 32_000
+
 
 class VoyageAIVectorizer(BaseVectorizer):
-    """The VoyageAIVectorizer class utilizes VoyageAI's API to generate
+    """The VoyageAIVectorizer class utilizes Voyage AI by MongoDB's API to generate
     embeddings for text and multimodal (text / image / video) data.
 
-    This vectorizer is designed to interact with VoyageAI's /embed, /multimodal_embed,
-    and /contextualized_embed APIs. Any model identifier accepted by VoyageAI can be
+    This vectorizer is designed to interact with Voyage AI's /embed, /multimodal_embed,
+    and /contextualized_embed APIs. Any model identifier accepted by Voyage AI can be
     passed via ``model`` - for example the general-purpose ``voyage-4-large`` /
-    ``voyage-4`` / ``voyage-4-lite`` / ``voyage-4-nano`` family, domain models such
-    as ``voyage-code-4``, contextualized ``voyage-context-4`` / ``voyage-context-3``
-    models, and multimodal ``voyage-multimodal-*`` models.
+    ``voyage-4`` / ``voyage-4-lite`` family, domain models such as ``voyage-code-4``,
+    ``voyage-finance-2`` and ``voyage-law-2``, contextualized ``voyage-context-4`` /
+    ``voyage-context-3`` models, and multimodal ``voyage-multimodal-3.5`` /
+    ``voyage-multimodal-3`` models. Older models such as ``voyage-3-large``
+    and ``voyage-3.5`` remain available.
     See https://docs.voyageai.com/docs/embeddings for the current catalog.
 
     It requires an API key for authentication. The key can be provided
     directly in the `api_config` dictionary or through the `VOYAGE_API_KEY`
-    environment variable. User must obtain an API key from VoyageAI's website
+    environment variable. User must obtain an API key from Voyage AI's website
     (https://dash.voyageai.com/). Additionally, the `voyageai` python
     client must be installed with `pip install voyageai`. For image embeddings, the Pillow
     library must also be installed with `pip install pillow`.
@@ -72,7 +88,7 @@ class VoyageAIVectorizer(BaseVectorizer):
 
         # Basic usage
         vectorizer = VoyageAIVectorizer(
-            model="voyage-3-large",
+            model="voyage-4-large",
             api_config={"api_key": "your-voyageai-api-key"} # OR set VOYAGE_API_KEY in your env
         )
         query_embedding = vectorizer.embed(
@@ -82,6 +98,12 @@ class VoyageAIVectorizer(BaseVectorizer):
         doc_embeddings = vectorizer.embed_many(
             contents=["your document text", "more document text"],
             input_type="document"
+        )
+
+        # Shorter (Matryoshka) embeddings: dims reflects output_dimension
+        small_vectorizer = VoyageAIVectorizer(
+            model="voyage-4-large",
+            output_dimension=256,
         )
 
         # Contextualized embeddings (voyage-context-* models) - requires voyageai>=0.5.0
@@ -123,7 +145,7 @@ class VoyageAIVectorizer(BaseVectorizer):
         cache = EmbeddingsCache(name="voyageai_embeddings_cache")
 
         vectorizer = VoyageAIVectorizer(
-            model="voyage-3-large",
+            model="voyage-4-large",
             api_config={"api_key": "your-voyageai-api-key"},
             cache=cache
         )
@@ -150,11 +172,12 @@ class VoyageAIVectorizer(BaseVectorizer):
         api_config: dict[str, Any] | None = None,
         dtype: str = "float32",
         cache: "EmbeddingsCache | None" = None,
+        output_dimension: int | None = None,
         **kwargs,
     ):
-        """Initialize the VoyageAI vectorizer.
+        """Initialize the Voyage AI by MongoDB vectorizer.
 
-        Visit https://docs.voyageai.com/docs/embeddings to learn about embeddings and check the available models.
+        Visit https://docs.voyageai.com/docs/embeddings to learn about Voyage AI embeddings and check the available models.
 
         Args:
             model (str): Model to use for embedding. Defaults to "voyage-3-large".
@@ -166,10 +189,18 @@ class VoyageAIVectorizer(BaseVectorizer):
                 Defaults to 'float32'.
             cache (Optional[EmbeddingsCache]): Optional EmbeddingsCache instance to cache embeddings for
                 better performance with repeated items. Defaults to None.
+            output_dimension (Optional[int]): Request shorter (Matryoshka) embeddings,
+                e.g. 256, 512, 1024 or 2048 for the voyage-4, voyage-3.5 and
+                voyage-context-* families. Sent with every request and used when
+                measuring ``dims``. When None, no ``output_dimension`` is sent and the
+                model's native dimension is used. The embeddings cache is keyed by
+                model, so do not share one cache between vectorizers that use
+                different dimensions. Defaults to None.
 
         Raises:
             ImportError: If the voyageai library is not installed.
-            ValueError: If the API key is not provided.
+            ValueError: If the API key is not provided, or ``output_dimension`` is
+                not a positive integer.
 
         Notes:
             - Multimodal models require voyageai>=0.3.6 to be installed for video embeddings, as well as
@@ -179,15 +210,25 @@ class VoyageAIVectorizer(BaseVectorizer):
                 independently (no cross-input contextualization) and the one-embedding-per-input
                 contract and cache determinism are preserved. A document longer than ``chunk_size``
                 (32000 tokens) auto-chunks into multiple chunks but only the first chunk's embedding
-                is kept; the rest are dropped. ``truncation`` is not forwarded to the contextualized
-                API (it does not accept it), so it is silently ignored for these models.
-            - The plain text embedding path (``embed``/``embed_many`` for non-context,
-                non-multimodal models) uses token-aware batching: inputs are grouped into requests
-                bounded by both the per-model item cap and the model's per-request token limit, so
-                large inputs are packed efficiently without exceeding VoyageAI's token budget.
+                is kept (a warning is logged); the rest are dropped. ``truncation`` is not forwarded
+                to the contextualized API (it does not accept it), so it is silently ignored for
+                these models.
+            - Text and contextualized embeddings use token-aware batching: inputs are grouped into
+                requests bounded by the item cap (``batch_size``, at most 1000 per request) and the
+                per-request token limit, counted with the voyageai tokenizer, and the embeddings are
+                returned in input order. If the tokenizer is unavailable, a warning is logged and
+                batching falls back to the item cap alone.
 
         """
         super().__init__(model=model, dtype=dtype, cache=cache)
+        if output_dimension is not None and (
+            isinstance(output_dimension, bool)
+            or not isinstance(output_dimension, int)
+            or output_dimension <= 0
+        ):
+            raise ValueError("output_dimension must be a positive integer.")
+        # Set before _setup so the dimension probe uses the same request options.
+        self._output_dimension = output_dimension
         # Initialize client and set up the model
         self._setup(api_config, **kwargs)
 
@@ -202,7 +243,7 @@ class VoyageAIVectorizer(BaseVectorizer):
         return "context" in self.model
 
     def embed_image(self, image_path: str, **kwargs) -> list[float] | bytes:
-        """Embed an image (from its path on disk) using VoyageAI's multimodal API. Requires pillow to be installed."""
+        """Embed an image (from its path on disk) using Voyage AI's multimodal API. Requires pillow to be installed."""
         if not self.is_multimodal:
             raise ValueError("Cannot embed image with a non-multimodal model.")
 
@@ -216,7 +257,7 @@ class VoyageAIVectorizer(BaseVectorizer):
         return self.embed(Image.open(image_path), **kwargs)
 
     def embed_video(self, video_path: str, **kwargs) -> list[float] | bytes:
-        """Embed a video (from its path on disk) using VoyageAI's multimodal API.
+        """Embed a video (from its path on disk) using Voyage AI's multimodal API.
 
         Requires voyageai>=0.3.6 to be installed, as well as ffmpeg to be installed on the system.
         """
@@ -238,7 +279,7 @@ class VoyageAIVectorizer(BaseVectorizer):
         return self.embed(video, **kwargs)
 
     def _setup(self, api_config: dict[str, Any] | None, **kwargs):
-        """Set up the VoyageAI client and determine the embedding dimensions."""
+        """Set up the Voyage AI client and determine the embedding dimensions."""
         # Initialize client
         self._initialize_client(api_config, **kwargs)
 
@@ -254,12 +295,12 @@ class VoyageAIVectorizer(BaseVectorizer):
 
     def _initialize_client(self, api_config: dict[str, Any] | None, **kwargs):
         """
-        Setup the VoyageAI clients using the provided API key or an
+        Setup the Voyage AI clients using the provided API key or an
         environment variable.
 
         Args:
             api_config: Dictionary with API configuration options
-            **kwargs: Additional arguments to pass to VoyageAI clients
+            **kwargs: Additional arguments to pass to Voyage AI clients
 
         Raises:
             ImportError: If the voyageai library is not installed
@@ -273,7 +314,7 @@ class VoyageAIVectorizer(BaseVectorizer):
             from voyageai import AsyncClient, Client
         except ImportError:
             raise ImportError(
-                "VoyageAI vectorizer requires the voyageai library. "
+                "Voyage AI vectorizer requires the voyageai library. "
                 "Please install with `pip install voyageai`"
             )
 
@@ -281,13 +322,13 @@ class VoyageAIVectorizer(BaseVectorizer):
         api_key = (api_config or {}).get("api_key") or os.getenv("VOYAGE_API_KEY")
         if not api_key:
             raise ValueError(
-                "VoyageAI API key is required. "
+                "Voyage AI API key is required. "
                 "Provide it in api_config or set the VOYAGE_API_KEY environment variable."
             )
 
         self._client = Client(api_key=api_key, **kwargs)
         self._aclient = AsyncClient(api_key=api_key, **kwargs)
-        # Token-aware batching relies on the VoyageAI tokenizer, which loads a
+        # Token-aware batching relies on the Voyage AI tokenizer, which loads a
         # HuggingFace tokenizer for the model. If that is ever unavailable we
         # fall back to item-count batching and remember it (see _batchify_text).
         self._token_batching_supported = True
@@ -307,7 +348,7 @@ class VoyageAIVectorizer(BaseVectorizer):
             embedding = self._embed("dimension check", input_type="document")
             return len(embedding)
         except (KeyError, IndexError) as ke:
-            raise ValueError(f"Unexpected response from the VoyageAI API: {str(ke)}")
+            raise ValueError(f"Unexpected response from the Voyage AI API: {str(ke)}")
         except Exception as e:  # pylint: disable=broad-except
             # fall back (TODO get more specific)
             raise ValueError(f"Error setting embedding model dimensions: {str(e)}")
@@ -334,23 +375,26 @@ class VoyageAIVectorizer(BaseVectorizer):
             # voyage-code-*, voyage-finance-2, voyage-law-2, voyage-context-*).
             return 7
 
-    def _token_limit(self) -> int:
-        """Per-request token budget for the current model (token-aware batching)."""
+    def _token_limit(self, input_type: str | None = None) -> int:
+        """Per-request token budget for the current model and input type."""
+        if self.is_context:
+            if input_type == "query":
+                return VOYAGE_CONTEXT_QUERY_TOKEN_LIMIT
+            return VOYAGE_CONTEXT_DOCUMENT_TOKEN_LIMIT
         return VOYAGE_TOKEN_LIMITS.get(self.model, DEFAULT_VOYAGE_TOKEN_LIMIT)
 
     def _count_tokens(self, text: str) -> int:
-        """Count tokens for a single text using VoyageAI's tokenizer."""
+        """Count tokens for a single text using the voyageai tokenizer."""
         return len(self._client.tokenize([text], model=self.model)[0])
 
-    def _batchify_by_tokens(self, texts: list[str], batch_size: int):
+    def _batchify_by_tokens(self, texts: list[str], batch_size: int, max_tokens: int):
         """Yield batches of texts bounded by both item count and token budget.
 
         Batches are grown until adding the next text would exceed either the
-        per-model item cap (``batch_size``) or the model's per-request token limit.
-        A single text larger than the token limit is still yielded on its own
-        (never dropped), matching VoyageAI's own client batching behavior.
+        item cap (``batch_size``) or ``max_tokens``. A single text larger than
+        the token limit is still yielded on its own (never dropped), so the API
+        reports the error rather than this method hiding the input.
         """
-        max_tokens = self._token_limit()
         batch: list[str] = []
         batch_tokens = 0
         for text in texts:
@@ -365,20 +409,35 @@ class VoyageAIVectorizer(BaseVectorizer):
         if batch:
             yield batch
 
-    def _batchify_text(self, texts: list[str], batch_size: int) -> list[list[str]]:
-        """Batch plain-text inputs, token-aware when possible.
+    def _batchify_text(
+        self, texts: list[str], batch_size: int, input_type: str | None = None
+    ) -> list[list[str]]:
+        """Batch text inputs by item count and per-request token limit.
 
-        Token-aware batching depends on VoyageAI's tokenizer, which loads a
+        Token-aware batching depends on the voyageai tokenizer, which loads a
         HuggingFace tokenizer for the model. When that is unavailable (e.g. the
-        HF Hub is unreachable or has no tokenizer for the model id), fall back to
-        fixed item-count batching instead of failing, and remember the fallback
-        so we don't re-attempt (and re-timeout) the tokenizer on later calls.
+        HF Hub is unreachable or has no tokenizer for the model id), log a
+        warning and fall back to fixed item-count batching instead of failing,
+        and remember the fallback so we don't re-attempt (and re-timeout) the
+        tokenizer on later calls.
         """
+        # Voyage AI rejects requests with more than 1,000 inputs.
+        batch_size = min(batch_size, VOYAGE_MAX_INPUTS_PER_REQUEST)
         if self._token_batching_supported:
             try:
                 # Materialize so a tokenizer failure surfaces here, not mid-request.
-                return list(self._batchify_by_tokens(texts, batch_size))
-            except Exception:
+                return list(
+                    self._batchify_by_tokens(
+                        texts, batch_size, self._token_limit(input_type)
+                    )
+                )
+            except Exception as e:
+                logger.warning(
+                    "Voyage AI tokenizer unavailable for model %s (%s); batching by "
+                    "item count only, so the per-request token limit is not enforced.",
+                    self.model,
+                    e,
+                )
                 self._token_batching_supported = False
         return list(self.batchify(texts, batch_size))
 
@@ -412,12 +471,12 @@ class VoyageAIVectorizer(BaseVectorizer):
 
     def _embed(self, content: Any, **kwargs) -> list[float]:
         """
-        Generate a vector embedding for a single item using the VoyageAI API.
+        Generate a vector embedding for a single item using the Voyage AI API.
 
         Args:
             content: Item to embed - must be one of str, PIL.Image.Image, or voyageai.video_utils.Video. Images and
                 video require a multimodal model to be configured.
-            **kwargs: Additional parameters to pass to the VoyageAI API
+            **kwargs: Additional parameters to pass to the Voyage AI API
 
         Returns:
             List[float]: Vector embedding as a list of floats
@@ -439,13 +498,13 @@ class VoyageAIVectorizer(BaseVectorizer):
         self, contents: list[Any], batch_size: int | None = None, **kwargs
     ) -> list[list[float]]:
         """
-        Generate vector embeddings for a batch of items using the VoyageAI API.
+        Generate vector embeddings for a batch of items using the Voyage AI API.
 
         Args:
             contents: List of items to embed - each item must be one of str, PIL.Image.Image, or
                 voyageai.video_utils.Video. Images and video require a multimodal model to be configured.
             batch_size: Number of items to process in each API call
-            **kwargs: Additional parameters to pass to the VoyageAI API
+            **kwargs: Additional parameters to pass to the Voyage AI API
 
         Returns:
             List[List[float]]: List of vector embeddings as lists of floats
@@ -466,12 +525,20 @@ class VoyageAIVectorizer(BaseVectorizer):
         if batch_size is None:
             batch_size = self._get_batch_size()
 
-        # The plain text path uses token-aware batching; context/multimodal paths
-        # stay on fixed item-count batching (auto-chunking / opaque media inputs).
-        if self.is_context or self.is_multimodal:
-            batches: Any = self.batchify(contents, batch_size)
+        # Text and contextualized inputs are batched by token count; multimodal
+        # inputs are images/video whose token cost is not countable with the
+        # tokenizer, so they use the item cap (at most 1,000 per request).
+        if self.is_multimodal:
+            batches: Any = self.batchify(
+                contents, min(batch_size, VOYAGE_MAX_INPUTS_PER_REQUEST)
+            )
         else:
-            batches = self._batchify_text(contents, batch_size)
+            batches = self._batchify_text(contents, batch_size, input_type)
+
+        # Request shorter embeddings only when asked; an explicit per-call
+        # ``output_dimension`` takes precedence.
+        if self._output_dimension is not None:
+            kwargs.setdefault("output_dimension", self._output_dimension)
 
         try:
             embeddings: list[Any] = []
@@ -507,7 +574,7 @@ class VoyageAIVectorizer(BaseVectorizer):
         """Build the kwargs for a ``contextualized_embed`` call.
 
         The batch is passed as a flat ``list[str]``. Auto-chunking is only valid
-        for ``input_type="document"`` (VoyageAI rejects it for queries), so every
+        for ``input_type="document"`` (Voyage AI rejects it for queries), so every
         non-query input - including the default where ``input_type`` is omitted -
         is treated as a document and chunked with a large ``chunk_size``, making
         each input resolve to a single chunk. Explicit queries skip chunking and
@@ -527,8 +594,21 @@ class VoyageAIVectorizer(BaseVectorizer):
             **kwargs,
         }
         if enable_auto_chunking:
-            call_kwargs["chunk_size"] = 32000
+            call_kwargs["chunk_size"] = VOYAGE_CONTEXT_CHUNK_SIZE
         return call_kwargs
+
+    @staticmethod
+    def _first_chunk_embeddings(response: Any) -> list[list[float]]:
+        """Keep the first chunk's embedding per input (one embedding per input)."""
+        if any(len(result.embeddings) > 1 for result in response.results):
+            logger.warning(
+                "A Voyage AI contextualized input was split into several chunks; "
+                "only the first chunk's embedding is returned."
+            )
+        return cast(
+            "list[list[float]]",
+            [result.embeddings[0] for result in response.results],
+        )
 
     def _embed_context_batch(
         self, batch: list[str], input_type: str | None, **kwargs
@@ -539,11 +619,7 @@ class VoyageAIVectorizer(BaseVectorizer):
         response = self._client.contextualized_embed(  # type: ignore[attr-defined]
             **self._context_embed_kwargs(batch, input_type, kwargs),
         )
-        # Take the first chunk per input to keep one embedding per input.
-        return cast(
-            "list[list[float]]",
-            [result.embeddings[0] for result in response.results],
-        )
+        return self._first_chunk_embeddings(response)
 
     async def _aembed_context_batch(
         self, batch: list[str], input_type: str | None, **kwargs
@@ -555,20 +631,16 @@ class VoyageAIVectorizer(BaseVectorizer):
         response = await self._aclient.contextualized_embed(  # type: ignore[attr-defined]
             **self._context_embed_kwargs(batch, input_type, kwargs),
         )
-        # Take the first chunk per input to keep one embedding per input.
-        return cast(
-            "list[list[float]]",
-            [result.embeddings[0] for result in response.results],
-        )
+        return self._first_chunk_embeddings(response)
 
     async def _aembed(self, content: Any, **kwargs) -> list[float]:
         """
-        Asynchronously generate a vector embedding for a single item using the VoyageAI API.
+        Asynchronously generate a vector embedding for a single item using the Voyage AI API.
 
         Args:
             content: Item to embed - must be one of str, PIL.Image.Image, or voyageai.video_utils.Video. Images and
                 video require a multimodal model to be configured.
-            **kwargs: Additional parameters to pass to the VoyageAI API
+            **kwargs: Additional parameters to pass to the Voyage AI API
 
         Returns:
             List[float]: Vector embedding as a list of floats
@@ -590,13 +662,13 @@ class VoyageAIVectorizer(BaseVectorizer):
         self, contents: list[Any], batch_size: int | None = None, **kwargs
     ) -> list[list[float]]:
         """
-        Asynchronously generate vector embeddings for a batch of items using the VoyageAI API.
+        Asynchronously generate vector embeddings for a batch of items using the Voyage AI API.
 
         Args:
             contents: List of items to embed - each item must be one of str, PIL.Image.Image, or
                 voyageai.video_utils.Video. Images and video require a multimodal model to be configured.
             batch_size: Number of texts to process in each API call
-            **kwargs: Additional parameters to pass to the VoyageAI API
+            **kwargs: Additional parameters to pass to the Voyage AI API
 
         Returns:
             List[List[float]]: List of vector embeddings as lists of floats
@@ -617,12 +689,20 @@ class VoyageAIVectorizer(BaseVectorizer):
         if batch_size is None:
             batch_size = self._get_batch_size()
 
-        # The plain text path uses token-aware batching; context/multimodal paths
-        # stay on fixed item-count batching (auto-chunking / opaque media inputs).
-        if self.is_context or self.is_multimodal:
-            batches: Any = self.batchify(contents, batch_size)
+        # Text and contextualized inputs are batched by token count; multimodal
+        # inputs are images/video whose token cost is not countable with the
+        # tokenizer, so they use the item cap (at most 1,000 per request).
+        if self.is_multimodal:
+            batches: Any = self.batchify(
+                contents, min(batch_size, VOYAGE_MAX_INPUTS_PER_REQUEST)
+            )
         else:
-            batches = self._batchify_text(contents, batch_size)
+            batches = self._batchify_text(contents, batch_size, input_type)
+
+        # Request shorter embeddings only when asked; an explicit per-call
+        # ``output_dimension`` takes precedence.
+        if self._output_dimension is not None:
+            kwargs.setdefault("output_dimension", self._output_dimension)
 
         try:
             embeddings: list[Any] = []
